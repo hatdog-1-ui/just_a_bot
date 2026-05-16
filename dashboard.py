@@ -1,6 +1,7 @@
 """Interactive dashboard: Auto-Optimize → Backtest → Paper Trading."""
 
 from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -74,7 +75,7 @@ def run_optimize(symbol, timeframe, capital):
     return optimize(df, initial_capital=float(capital)), df
 
 
-def make_config_from(opt: OptimResult | None) -> BotConfig:
+def make_config_from(opt: Optional[OptimResult]) -> BotConfig:
     cfg = BotConfig(symbol=symbol, timeframe=timeframe)
     if manual_on:
         cfg.strategy.rsi_oversold    = rsi_oversold

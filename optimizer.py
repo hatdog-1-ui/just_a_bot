@@ -2,7 +2,7 @@
 
 import itertools
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 
@@ -42,7 +42,7 @@ def optimize(df: pd.DataFrame, initial_capital: float = 10_000.0) -> OptimResult
     """
     keys   = list(_GRID.keys())
     values = list(_GRID.values())
-    best: OptimResult | None = None
+    best: Optional[OptimResult] = None
 
     for combo in itertools.product(*values):
         params = dict(zip(keys, combo))
