@@ -101,20 +101,29 @@ tab_bt, tab_paper = st.tabs(["📊 Backtest", "🤖 Paper Trading"])
 # TAB 1 — BACKTEST
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_bt:
+    # Run optimization only when button is clicked; persist results in session state
     if st.session_state.get("do_optimize"):
         with st.status("Working...", expanded=True) as status:
             st.write("📡 Fetching historical price data...")
             st.write("🔍 Running parameter optimization (this takes ~20 seconds)...")
             try:
                 opt, df_raw = run_optimize(symbol, timeframe, initial_capital)
+                cfg    = make_config_from(opt)
+                result = Backtester(cfg).run(df_raw.copy(), initial_capital=float(initial_capital))
+                df_ind = compute_indicators(df_raw.copy(), cfg.strategy).dropna().reset_index()
+                # Save everything so auto-refresh doesn't wipe it
+                st.session_state.bt_opt    = opt
+                st.session_state.bt_result = result
+                st.session_state.bt_df_ind = df_ind
                 status.update(label="✅ Done!", state="complete")
             except Exception as e:
                 st.error(f"Error: {e}")
                 st.stop()
 
-        cfg    = make_config_from(opt)
-        result = Backtester(cfg).run(df_raw.copy(), initial_capital=float(initial_capital))
-        df_ind = compute_indicators(df_raw.copy(), cfg.strategy).dropna().reset_index()
+    if "bt_result" in st.session_state:
+        opt    = st.session_state.bt_opt
+        result = st.session_state.bt_result
+        df_ind = st.session_state.bt_df_ind
 
         # ── Best settings found ───────────────────────────────────────────────
         st.subheader("🏆 Best Settings Found Automatically")
@@ -275,7 +284,7 @@ with tab_bt:
         else:
             st.info("No trades in this period. The optimizer will try different settings next time.")
 
-    else:
+    if "bt_result" not in st.session_state:
         st.info("👈 Choose your coin and capital in the sidebar, then click **🔍 Auto-Optimize & Run**.")
         st.markdown("""
         ### How it works:
