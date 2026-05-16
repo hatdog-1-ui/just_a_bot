@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from enum import Enum
 
 import pandas as pd
-import pandas_ta as ta
+import ta.momentum as ta_momentum
+import ta.trend as ta_trend
+import ta.volatility as ta_volatility
 
 from config import StrategyConfig
 
@@ -30,28 +32,28 @@ class SignalResult:
 
 
 def compute_indicators(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
-    """
-    Attach RSI, MACD, Bollinger Bands, and volume MA columns to *df*.
-    Expects columns: open, high, low, close, volume (all lowercase).
-    """
     df = df.copy()
 
-    df["rsi"] = ta.rsi(df["close"], length=cfg.rsi_period)
+    df["rsi"] = ta_momentum.RSIIndicator(
+        close=df["close"], window=cfg.rsi_period
+    ).rsi()
 
-    macd_df = ta.macd(
-        df["close"],
-        fast=cfg.macd_fast,
-        slow=cfg.macd_slow,
-        signal=cfg.macd_signal,
+    macd = ta_trend.MACD(
+        close=df["close"],
+        window_fast=cfg.macd_fast,
+        window_slow=cfg.macd_slow,
+        window_sign=cfg.macd_signal,
     )
-    df["macd"] = macd_df[f"MACD_{cfg.macd_fast}_{cfg.macd_slow}_{cfg.macd_signal}"]
-    df["macd_signal"] = macd_df[f"MACDs_{cfg.macd_fast}_{cfg.macd_slow}_{cfg.macd_signal}"]
-    df["macd_hist"] = macd_df[f"MACDh_{cfg.macd_fast}_{cfg.macd_slow}_{cfg.macd_signal}"]
+    df["macd"] = macd.macd()
+    df["macd_signal"] = macd.macd_signal()
+    df["macd_hist"] = macd.macd_diff()
 
-    bb_df = ta.bbands(df["close"], length=cfg.bb_period, std=cfg.bb_std)
-    df["bb_upper"] = bb_df[f"BBU_{cfg.bb_period}_{cfg.bb_std}"]
-    df["bb_mid"] = bb_df[f"BBM_{cfg.bb_period}_{cfg.bb_std}"]
-    df["bb_lower"] = bb_df[f"BBL_{cfg.bb_period}_{cfg.bb_std}"]
+    bb = ta_volatility.BollingerBands(
+        close=df["close"], window=cfg.bb_period, window_dev=cfg.bb_std
+    )
+    df["bb_upper"] = bb.bollinger_hband()
+    df["bb_mid"] = bb.bollinger_mavg()
+    df["bb_lower"] = bb.bollinger_lband()
 
     df["volume_ma"] = df["volume"].rolling(cfg.volume_ma_period).mean()
 
@@ -68,10 +70,6 @@ def _macd_bearish_cross(prev_hist: float, curr_hist: float) -> bool:
 
 
 def generate_signal(df: pd.DataFrame, cfg: StrategyConfig) -> SignalResult:
-    """
-    Evaluate the two most recent complete bars and return a trading signal.
-    *df* must already have indicator columns (call compute_indicators first).
-    """
     if len(df) < 2:
         raise ValueError("Need at least 2 bars to detect crossovers.")
 
