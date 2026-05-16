@@ -11,6 +11,10 @@ Backtest:
 
 Live trading (real orders):
     python bot.py --live
+
+The paper-trading loop uses a WebSocket price feed (ws_feed.PriceFeed) for
+real-time price updates between candle polls, reducing latency for SL/TP
+monitoring without hammering the REST API.
 """
 
 import argparse
@@ -24,6 +28,7 @@ from exchange import ExchangeClient
 from risk_manager import RiskManager, OrderPlan
 from strategy import Signal, compute_indicators, generate_signal
 from backtester import Backtester
+from ws_feed import PriceFeed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,40 +109,53 @@ class PaperPortfolio:
 def paper_trading_loop(client: ExchangeClient) -> None:
     portfolio = PaperPortfolio(initial_capital=10_000.0)
     risk_mgr = RiskManager(CONFIG.risk)
+
+    # WebSocket feed provides real-time prices between candle polls so SL/TP
+    # checks don't have to wait a full poll_interval for each REST call.
+    feed = PriceFeed(CONFIG.symbol)
+    feed.start()
+
     logger.info("Paper trading started. Symbol=%s  TF=%s", CONFIG.symbol, CONFIG.timeframe)
 
-    while True:
-        try:
-            df = client.fetch_ohlcv(CONFIG.symbol, CONFIG.timeframe, limit=CONFIG.warmup_bars + 10)
-            df = compute_indicators(df, CONFIG.strategy)
-            df = df.dropna()
+    try:
+        while True:
+            try:
+                df = client.fetch_ohlcv(CONFIG.symbol, CONFIG.timeframe, limit=CONFIG.warmup_bars + 10)
+                df = compute_indicators(df, CONFIG.strategy)
+                df = df.dropna()
 
-            if len(df) < 2:
-                logger.warning("Not enough bars after indicator warmup.")
+                if len(df) < 2:
+                    logger.warning("Not enough bars after indicator warmup.")
+                    time.sleep(CONFIG.poll_interval)
+                    continue
+
+                # Prefer the live WS price for exit checks; fall back to last close.
+                ws_price = feed.latest_price
+                current_price = ws_price if ws_price is not None else df.iloc[-1]["close"]
+                portfolio.check_exit(current_price)
+
+                if portfolio.position is None:
+                    result = generate_signal(df, CONFIG.strategy)
+                    logger.info(
+                        "Signal=%-4s  price=%.4f  RSI=%.1f  MACD_hist=%.6f  vol_ok=%s",
+                        result.signal.value, result.close, result.rsi, result.macd_hist, result.volume_ok,
+                    )
+                    if result.signal == Signal.BUY:
+                        plan = risk_mgr.plan_long(current_price, portfolio.equity)
+                        portfolio.open_long(plan)
+
                 time.sleep(CONFIG.poll_interval)
-                continue
 
-            current_price = df.iloc[-1]["close"]
-            portfolio.check_exit(current_price)
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                logger.exception("Unexpected error: %s", exc)
+                time.sleep(CONFIG.poll_interval)
 
-            if portfolio.position is None:
-                result = generate_signal(df, CONFIG.strategy)
-                logger.info(
-                    "Signal=%-4s  price=%.4f  RSI=%.1f  MACD_hist=%.6f  vol_ok=%s",
-                    result.signal.value, result.close, result.rsi, result.macd_hist, result.volume_ok,
-                )
-                if result.signal == Signal.BUY:
-                    plan = risk_mgr.plan_long(current_price, portfolio.equity)
-                    portfolio.open_long(plan)
-
-            time.sleep(CONFIG.poll_interval)
-
-        except KeyboardInterrupt:
-            logger.info("Shutting down. Final equity=%.2f USDT", portfolio.equity)
-            break
-        except Exception as exc:
-            logger.exception("Unexpected error: %s", exc)
-            time.sleep(CONFIG.poll_interval)
+    except KeyboardInterrupt:
+        logger.info("Shutting down. Final equity=%.2f USDT", portfolio.equity)
+    finally:
+        feed.stop()
 
 
 def live_trading_loop(client: ExchangeClient) -> None:
